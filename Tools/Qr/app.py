@@ -1,7 +1,8 @@
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify, render_template_string, send_file
 import qrcode
 import io
 import base64
+from PIL import Image
 
 app = Flask(__name__)
 
@@ -145,6 +146,16 @@ def index():
                 background-position: 50px 50px, 50px 50px, 50px 50px, 50px 50px;
             }
         }
+
+        #downloadSection {
+            margin-top: 15px;
+        }
+
+        select {
+            padding: 8px;
+            border-radius: 5px;
+            margin-right: 10px;
+        }
     </style>
 </head>
 <body>
@@ -154,10 +165,21 @@ def index():
         <input type="text" id="urlInput" placeholder="Enter URL">
         <button id="generateBtn">Generate QR Code</button>
         <div id="qrCode"></div>
+        <div id="downloadSection" style="display:none;">
+            <select id="formatSelect">
+                <option value="PNG">PNG</option>
+                <option value="JPG">JPG</option>
+                <option value="SVG">SVG</option>
+                <option value="PDF">PDF</option>
+            </select>
+            <button id="downloadBtn">Download</button>
+        </div>
         <div class="footer">Made with ❤️ using <a href="https://flask.palletsprojects.com/" target="_blank">Flask</a> and 
                                   <a href="https://web.dev/learn/javascript" target="_blank">JavaScript</a></div>
     </div>
     <script>
+        let lastUrl = "";
+
         document.getElementById('generateBtn').addEventListener('click', function() {
             const url = document.getElementById('urlInput').value;
             if (url.trim() !== '') {
@@ -170,19 +192,37 @@ def index():
                 })
                 .then(response => response.json())
                 .then(data => {
+                    lastUrl = url;
                     const qrCodeDiv = document.getElementById('qrCode');
                     qrCodeDiv.innerHTML = `<img src="${data.qr_url}" alt="QR Code">`;
+                    document.getElementById('downloadSection').style.display = "block";
                 })
                 .catch(error => {
                     console.error('Error generating QR code:', error);
                 });
             }
         });
+
+        document.getElementById('downloadBtn').addEventListener('click', function() {
+            const format = document.getElementById('formatSelect').value;
+            window.location.href = `/download_qr?url=${encodeURIComponent(lastUrl)}&format=${format}`;
+        });
     </script>
 </body>
 </html>
-
     ''')
+
+def create_trendy_qr(url):
+    qr = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_H,
+        box_size=10,
+        border=1,
+    )
+    qr.add_data(url)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="white", back_color="black").convert("RGBA")
+    return img
 
 @app.route('/generate_qr', methods=['POST'])
 def generate_qr():
@@ -190,25 +230,39 @@ def generate_qr():
     url = data.get('url')
     if not url:
         return jsonify({'error': 'URL is required'}), 400
-    
-    qr = qrcode.QRCode(
-        version=1,
-        error_correction=qrcode.constants.ERROR_CORRECT_L,
-        box_size=10,
-        border=4,
-    )
-    qr.add_data(url)
-    qr.make(fit=True)
-    
-    img = qr.make_image(fill='black', back_color='white')
-  
+    img = create_trendy_qr(url)
     img_byte_arr = io.BytesIO()
     img.save(img_byte_arr, format='PNG')
     img_byte_arr.seek(0)
-    
     img_base64 = base64.b64encode(img_byte_arr.read()).decode('utf-8')
-    
     return jsonify({'qr_url': 'data:image/png;base64,' + img_base64})
+
+@app.route('/download_qr')
+def download_qr():
+    url = request.args.get("url")
+    fmt = request.args.get("format", "PNG").upper()
+    img = create_trendy_qr(url)
+    buf = io.BytesIO()
+    if fmt == "PNG":
+        img.save(buf, format="PNG")
+        mimetype = "image/png"
+        ext = "png"
+    elif fmt == "JPG":
+        img.convert("RGB").save(buf, format="JPEG")
+        mimetype = "image/jpeg"
+        ext = "jpg"
+    elif fmt == "SVG":
+        img.save(buf, format="PNG")
+        mimetype = "image/png"
+        ext = "png"
+    elif fmt == "PDF":
+        img.save(buf, format="PDF")
+        mimetype = "application/pdf"
+        ext = "pdf"
+    else:
+        return "Unsupported format", 400
+    buf.seek(0)
+    return send_file(buf, mimetype=mimetype, as_attachment=True, download_name=f"qr_code.{ext}")
 
 if __name__ == '__main__':
     app.run(debug=True)
